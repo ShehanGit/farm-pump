@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1C6E8C">
+<title>Farm Pump</title>
+<link rel="icon" href="data:,">
+<link rel="manifest" href='data:application/json,{"name":"Farm Pump","short_name":"Pump","start_url":".","display":"standalone","background_color":"%23EFEAD9","theme_color":"%231C6E8C","icons":[]}'>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
+<style>
+  :root{
+    --bg: #EFEAD9;
+    --surface: #FFFFFF;
+    --ink: #2B2A25;
+    --ink-soft: #726F60;
+    --water: #1C6E8C;
+    --water-deep: #124A5E;
+    --water-pale: #D7E7EC;
+    --soil: #6B4226;
+    --growth: #4C7A3D;
+    --alert: #B33A3A;
+    --ring-track: #DED6BC;
+    --radius: 18px;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; padding:0; background:var(--bg); color:var(--ink); font-family:'Inter',sans-serif;}
+  body{padding:20px 16px 48px; max-width:520px; margin:0 auto; padding-bottom:calc(48px + env(safe-area-inset-bottom));}
+  h1,h2,h3{font-family:'Space Grotesk',sans-serif; margin:0;}
+  .eyebrow{font-size:12px; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-soft); font-weight:600; margin-bottom:4px;}
+  header{display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:18px;}
+  header h1{font-size:22px; font-weight:700;}
+  .conn{display:flex; align-items:center; gap:6px; font-size:12px; color:var(--ink-soft); font-weight:500;}
+  .dot{width:8px; height:8px; border-radius:50%; background:var(--alert); flex-shrink:0;}
+  .dot.live{background:var(--growth); box-shadow:0 0 0 3px rgba(76,122,61,.18);}
+
+  .ring-card{background:var(--surface); border-radius:24px; padding:28px 20px 22px; text-align:center; box-shadow:0 1px 3px rgba(43,42,37,.06), 0 8px 24px rgba(43,42,37,.05); margin-bottom:16px;}
+  .ring-wrap{position:relative; width:180px; height:180px; margin:0 auto 14px;}
+  svg.ring{width:100%; height:100%; transform:rotate(-90deg);}
+  .ring-track{fill:none; stroke:var(--ring-track); stroke-width:12;}
+  .ring-fill{fill:none; stroke:var(--water); stroke-width:12; stroke-linecap:round; stroke-dasharray:502; stroke-dashoffset:502; transition:stroke-dashoffset .6s ease;}
+  .ring-fill.on{stroke-dashoffset:0; animation:ripple 2.4s ease-in-out infinite;}
+  @keyframes ripple{0%,100%{stroke-width:12;} 50%{stroke-width:15;}}
+  .ring-center{position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;}
+  .pump-state{font-family:'Space Grotesk',sans-serif; font-size:26px; font-weight:700; color:var(--water-deep);}
+  .pump-state.off{color:var(--ink-soft);}
+  .pump-sub{font-size:12px; color:var(--ink-soft); margin-top:2px; max-width:120px;}
+  .meta-row{display:flex; justify-content:center; gap:14px; font-size:12px; color:var(--ink-soft); margin-top:6px; flex-wrap:wrap;}
+
+  .card{background:var(--surface); border-radius:var(--radius); padding:18px; margin-bottom:14px; box-shadow:0 1px 3px rgba(43,42,37,.05);}
+  .card h2{font-size:15px; font-weight:600; margin-bottom:12px;}
+  .row{display:flex; gap:10px; flex-wrap:wrap;}
+
+  button{font-family:'Inter',sans-serif; border:none; border-radius:12px; padding:14px 18px; font-size:14.5px; font-weight:600; cursor:pointer; color:#fff; flex:1; min-width:120px; transition:transform .08s ease, opacity .15s ease;}
+  button:active{transform:scale(.97);}
+  button.secondary{background:var(--water-pale); color:var(--water-deep);}
+  button.on{background:var(--water);}
+  button.off{background:var(--alert);}
+  button.growth{background:var(--growth);}
+  button.soil{background:var(--soil);}
+  button.ghost{background:transparent; color:var(--ink-soft); border:1.5px solid var(--ring-track); flex:0 0 auto;}
+  button:disabled{opacity:.45; cursor:not-allowed;}
+
+  .timer-row{display:flex; gap:10px; align-items:center; margin-top:10px;}
+  input[type=number], input[type=time]{font-family:'Inter'; padding:12px; border:1.5px solid var(--ring-track); border-radius:10px; font-size:14px; background:#FBF9F2; width:100%;}
+
+  .toggle-line{display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;}
+  .switch{position:relative; width:48px; height:28px; border-radius:14px; background:var(--ring-track); flex-shrink:0; cursor:pointer; transition:background .2s;}
+  .switch.on{background:var(--growth);}
+  .switch::after{content:''; position:absolute; width:22px; height:22px; border-radius:50%; background:#fff; top:3px; left:3px; transition:left .2s; box-shadow:0 1px 2px rgba(0,0,0,.2);}
+  .switch.on::after{left:23px;}
+
+  .slot{display:flex; align-items:center; gap:10px; padding:10px 0; border-top:1px solid #F0ECDD;}
+  .slot:first-child{border-top:none;}
+  .slot input[type=time]{width:auto; flex:0 0 auto;}
+  .slot input[type=number]{width:56px; flex:0 0 auto;}
+  .slot label.en{display:flex; align-items:center; gap:6px; font-size:13px; color:var(--ink-soft); font-weight:500; flex:1;}
+  .slot input[type=checkbox]{width:18px; height:18px; accent-color:var(--growth);}
+
+  .stat-big{font-family:'Space Grotesk',sans-serif; font-size:28px; font-weight:700; color:var(--water-deep);}
+  .stat-label{font-size:12px; color:var(--ink-soft); margin-top:2px;}
+
+  .log-entry{padding:10px 0; border-top:1px solid #F0ECDD; display:flex; gap:10px;}
+  .log-entry:first-child{border-top:none;}
+  .log-badge{font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; padding:3px 7px; border-radius:6px; white-space:nowrap; height:fit-content;}
+  .log-badge.scheduled{background:var(--water-pale); color:var(--water-deep);}
+  .log-badge.manual{background:#EFE6D8; color:var(--soil);}
+  .log-badge.switch{background:#E4EEDF; color:var(--growth);}
+  .log-badge.skipped{background:#F3E3E3; color:var(--alert);}
+  .log-badge.interrupted{background:#F3E3E3; color:var(--alert);}
+  .log-badge.system{background:#EEEAE0; color:var(--ink-soft);}
+  .log-body{flex:1; min-width:0;}
+  .log-note{font-size:13px; color:var(--ink); line-height:1.35;}
+  .log-time{font-size:11px; color:var(--ink-soft); margin-top:2px;}
+  .empty{font-size:13px; color:var(--ink-soft); text-align:center; padding:14px 0;}
+  .setup-note{font-size:12px; color:var(--ink-soft); background:#F6F1E4; border-radius:10px; padding:10px 12px; margin-bottom:14px; line-height:1.5;}
+  @media (prefers-reduced-motion: reduce){ .ring-fill.on{animation:none;} button{transition:none;} }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <div class="eyebrow">Irrigation control</div>
+    <h1>Home Pump</h1>
+  </div>
+  <div class="conn"><span class="dot" id="connDot"></span><span id="connText">Connecting…</span></div>
+</header>
+
+<div class="setup-note" id="setupNote" style="display:none">
+  Set your HiveMQ Cloud host, username and password at the top of the script in this file before this app can connect.
+</div>
+
+<div class="ring-card">
+  <div class="ring-wrap">
+    <svg class="ring" viewBox="0 0 180 180">
+      <circle class="ring-track" cx="90" cy="90" r="80"></circle>
+      <circle class="ring-fill" id="ringFill" cx="90" cy="90" r="80"></circle>
+    </svg>
+    <div class="ring-center">
+      <div class="pump-state off" id="pumpState">OFF</div>
+      <div class="pump-sub" id="pumpSub">Tap to check status</div>
+    </div>
+  </div>
+  <div class="meta-row">
+    <span id="wifiMeta">WiFi —</span>
+    <span id="timeMeta">Time —</span>
+    <span id="clockMeta">--:--</span>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Manual control</h2>
+  <p class="pump-sub" style="max-width:none; text-align:left; margin-bottom:12px;">Doesn't affect the automatic schedule.</p>
+  <div class="row">
+    <button class="on" onclick="cmdManualOn(0)">Turn pump ON</button>
+    <button class="off" onclick="cmdManualOff()">Turn pump OFF</button>
+  </div>
+  <div class="timer-row">
+    <input type="number" id="timerMinutes" value="15" min="1" max="240">
+    <button class="secondary" style="flex:0 0 auto; min-width:110px;" onclick="cmdManualTimer()">Run timer</button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="toggle-line">
+    <h2>Automatic schedule</h2>
+    <div class="switch" id="schedSwitch" onclick="toggleSchedule()"></div>
+  </div>
+  <div class="row" style="margin-bottom:10px;">
+    <button class="soil" style="min-width:0;" onclick="toggleSkip()" id="skipBtn">Skip next watering</button>
+  </div>
+  <div id="slotList"></div>
+  <div class="row" style="margin-top:12px;">
+    <button class="growth" onclick="saveSchedule()">Save times</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Lifetime watered</h2>
+  <div class="stat-big" id="totalStat">--</div>
+  <div class="stat-label">across every scheduled, manual, and switch-triggered run</div>
+</div>
+
+<div class="card">
+  <h2>Recent activity</h2>
+  <div id="logList"><div class="empty">No events yet</div></div>
+</div>
+
+<script>
+// ======== FILL THESE IN (from your HiveMQ Cloud cluster) ========
+const MQTT_HOST = "xxxxxxx.s1.eu.hivemq.cloud";
+const MQTT_WS_PORT = 8884;
+const MQTT_USER = "your-mqtt-username";
+const MQTT_PASS = "your-mqtt-password";
+const TOPIC_STATUS = "farmpump/status";
+const TOPIC_LOG    = "farmpump/log";
+const TOPIC_CMD    = "farmpump/cmd";
+// ==================================================================
+
+if (MQTT_HOST.startsWith("xxxxxxx")) {
+  document.getElementById('setupNote').style.display = 'block';
+}
+
+const RING_CIRC = 2 * Math.PI * 80;
+let latestStatus = null;
+
+const client = mqtt.connect(`wss://${MQTT_HOST}:${MQTT_WS_PORT}/mqtt`, {
+  username: MQTT_USER,
+  password: MQTT_PASS,
+  clientId: 'farmapp-' + Math.random().toString(16).slice(2),
+  reconnectPeriod: 4000
+});
+
+client.on('connect', () => {
+  setConn(true);
+  client.subscribe(TOPIC_STATUS);
+  client.subscribe(TOPIC_LOG);
+  publishCmd({cmd: 'requestStatus'});
+});
+client.on('reconnect', () => setConn(false, 'Reconnecting…'));
+client.on('close', () => setConn(false, 'Offline'));
+client.on('error', () => setConn(false, 'Connection error'));
+
+client.on('message', (topic, message) => {
+  try {
+    const data = JSON.parse(message.toString());
+    if (topic === TOPIC_STATUS) renderStatus(data);
+    else if (topic === TOPIC_LOG) renderLog(data);
+  } catch (e) { /* ignore malformed payload */ }
+});
+
+function setConn(live, label) {
+  document.getElementById('connDot').className = 'dot' + (live ? ' live' : '');
+  document.getElementById('connText').textContent = label || (live ? 'Live' : 'Offline');
+}
+
+function publishCmd(obj) {
+  if (client.connected) client.publish(TOPIC_CMD, JSON.stringify(obj));
+}
+
+function renderStatus(d) {
+  latestStatus = d;
+  const on = !!d.pumpOn;
+  document.getElementById('pumpState').textContent = on ? 'ON' : 'OFF';
+  document.getElementById('pumpState').className = 'pump-state' + (on ? '' : ' off');
+  document.getElementById('pumpSub').textContent = d.mode || '';
+  document.getElementById('ringFill').style.strokeDasharray = RING_CIRC;
+  document.getElementById('ringFill').style.strokeDashoffset = on ? 0 : RING_CIRC;
+  document.getElementById('ringFill').classList.toggle('on', on);
+
+  document.getElementById('wifiMeta').textContent = 'WiFi ' + (d.wifiConnected ? 'OK' : 'DOWN');
+  document.getElementById('timeMeta').textContent = 'Sync ' + (d.timeSynced ? 'OK' : 'NO');
+  document.getElementById('clockMeta').textContent = d.currentTime || '--:--';
+
+  document.getElementById('schedSwitch').classList.toggle('on', !!d.scheduleEnabled);
+  document.getElementById('skipBtn').textContent = d.skipNext ? 'Skip armed — tap to cancel' : 'Skip next watering';
+  document.getElementById('skipBtn').style.opacity = d.skipNext ? '1' : '.85';
+
+  const hrs = Math.floor((d.totalMinutes||0)/60);
+  const mins = Math.round((d.totalMinutes||0)%60);
+  document.getElementById('totalStat').textContent = hrs + 'h ' + mins + 'm';
+
+  if (Array.isArray(d.schedules)) renderSlots(d.schedules);
+}
+
+function renderSlots(schedules) {
+  if (document.activeElement && document.getElementById('slotList').contains(document.activeElement)) return; // don't clobber while editing
+  const box = document.getElementById('slotList');
+  box.innerHTML = '';
+  schedules.forEach((s, i) => {
+    const row = document.createElement('div');
+    row.className = 'slot';
+    row.innerHTML = `
+      <label class="en"><input type="checkbox" id="slotEn${i}" ${s.enabled?'checked':''}>Slot ${i+1}</label>
+      <input type="time" id="slotTime${i}" value="${String(s.hour).padStart(2,'0')}:${String(s.minute).padStart(2,'0')}">
+      <input type="number" id="slotDur${i}" value="${s.durationMin}" min="1" max="360">
+    `;
+    box.appendChild(row);
+  });
+}
+
+function renderLog(entries) {
+  const box = document.getElementById('logList');
+  if (!Array.isArray(entries) || entries.length === 0) { box.innerHTML = '<div class="empty">No events yet</div>'; return; }
+  box.innerHTML = '';
+  entries.slice().reverse().forEach(e => {
+    const row = document.createElement('div');
+    row.className = 'log-entry';
+    const type = (e.type || 'system').toLowerCase();
+    row.innerHTML = `
+      <span class="log-badge ${type}">${type}</span>
+      <div class="log-body">
+        <div class="log-note">${(e.dur||0).toFixed(1)} min — ${e.note || ''}</div>
+        <div class="log-time">${e.ts || ''}</div>
+      </div>`;
+    box.appendChild(row);
+  });
+}
+
+// ---- Controls ----
+function cmdManualOn(minutes) { publishCmd({cmd:'manualOn', minutes: minutes}); }
+function cmdManualOff() { publishCmd({cmd:'manualOff'}); }
+function cmdManualTimer() {
+  const m = parseInt(document.getElementById('timerMinutes').value) || 15;
+  publishCmd({cmd:'manualOn', minutes: m});
+}
+function toggleSchedule() {
+  if (!latestStatus) return;
+  publishCmd({cmd:'scheduleEnabled', value: !latestStatus.scheduleEnabled});
+}
+function toggleSkip() {
+  if (!latestStatus) return;
+  publishCmd({cmd:'skipNext', value: !latestStatus.skipNext});
+}
+function saveSchedule() {
+  const schedules = [];
+  for (let i = 0; i < 4; i++) {
+    const enEl = document.getElementById('slotEn'+i);
+    if (!enEl) continue;
+    const t = document.getElementById('slotTime'+i).value.split(':');
+    schedules.push({
+      enabled: enEl.checked,
+      hour: parseInt(t[0]),
+      minute: parseInt(t[1]),
+      durationMin: parseInt(document.getElementById('slotDur'+i).value) || 30
+    });
+  }
+  publishCmd({cmd:'setSchedule', schedules: schedules});
+}
+</script>
+</body>
+</html>
