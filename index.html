@@ -264,7 +264,7 @@ function publishCmd(obj) {
     toast('Not connected — command not sent');
     return;
   }
-  client.publish(TOPIC_CMD, JSON.stringify(obj), { qos: 1 }, (err) => {
+  client.publish(TOPIC_CMD, JSON.stringify(obj), { qos: 0 }, (err) => {
     if (err) { dbg('Publish FAILED: ' + err.message, 'err'); toast('Send failed'); }
     else { dbg('Sent: ' + JSON.stringify(obj), 'sent'); toast('Sent'); }
   });
