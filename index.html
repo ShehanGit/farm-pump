@@ -96,6 +96,13 @@
   .log-time{font-size:11px; color:var(--ink-soft); margin-top:2px;}
   .empty{font-size:13px; color:var(--ink-soft); text-align:center; padding:14px 0;}
   .setup-note{font-size:12px; color:var(--ink-soft); background:#F6F1E4; border-radius:10px; padding:10px 12px; margin-bottom:14px; line-height:1.5;}
+
+  /* --- debug panel --- */
+  .debug{background:#20241F; color:#B9E6B0; border-radius:var(--radius); padding:14px; font-family:monospace; font-size:11.5px; line-height:1.5; max-height:180px; overflow-y:auto;}
+  .debug .err{color:#FF8A80;}
+  .debug .sent{color:#82B1FF;}
+  .toast{position:fixed; bottom:calc(20px + env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%); background:#2B2A25; color:#fff; padding:9px 16px; border-radius:20px; font-size:13px; opacity:0; pointer-events:none; transition:opacity .25s ease; z-index:50;}
+  .toast.show{opacity:1;}
   @media (prefers-reduced-motion: reduce){ .ring-fill.on{animation:none;} button{transition:none;} }
 </style>
 </head>
@@ -169,6 +176,13 @@
   <div id="logList"><div class="empty">No events yet</div></div>
 </div>
 
+<div class="card">
+  <h2>Debug log <span style="font-weight:400; color:var(--ink-soft); font-size:12px;">(remove this card once things work)</span></h2>
+  <div class="debug" id="debugLog">Waiting for connection…</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
 <script>
 // ======== FILL THESE IN (from your HiveMQ Cloud cluster) ========
 const MQTT_HOST = "d5e17ca8a5d34df8a0dd8af31f661cce.s1.eu.hivemq.cloud";
@@ -187,29 +201,56 @@ if (MQTT_HOST.startsWith("xxxxxxx")) {
 const RING_CIRC = 2 * Math.PI * 80;
 let latestStatus = null;
 
+// ---- debug helpers ----
+function dbg(msg, cls) {
+  const box = document.getElementById('debugLog');
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  const t = new Date().toLocaleTimeString();
+  line.textContent = `[${t}] ${msg}`;
+  box.appendChild(line);
+  box.scrollTop = box.scrollHeight;
+  while (box.children.length > 40) box.removeChild(box.firstChild);
+}
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.remove('show'), 1800);
+}
+
+dbg('Connecting to wss://' + MQTT_HOST + ':' + MQTT_WS_PORT + '/mqtt as user "' + MQTT_USER + '"');
+
 const client = mqtt.connect(`wss://${MQTT_HOST}:${MQTT_WS_PORT}/mqtt`, {
   username: MQTT_USER,
   password: MQTT_PASS,
   clientId: 'farmapp-' + Math.random().toString(16).slice(2),
-  reconnectPeriod: 4000
+  reconnectPeriod: 4000,
+  connectTimeout: 8000
 });
 
 client.on('connect', () => {
   setConn(true);
-  client.subscribe(TOPIC_STATUS);
-  client.subscribe(TOPIC_LOG);
+  dbg('Connected to broker.');
+  client.subscribe(TOPIC_STATUS, (err) => { if (err) dbg('Subscribe to status FAILED: ' + err.message, 'err'); else dbg('Subscribed to ' + TOPIC_STATUS); });
+  client.subscribe(TOPIC_LOG, (err) => { if (err) dbg('Subscribe to log FAILED: ' + err.message, 'err'); else dbg('Subscribed to ' + TOPIC_LOG); });
   publishCmd({cmd: 'requestStatus'});
 });
-client.on('reconnect', () => setConn(false, 'Reconnecting…'));
-client.on('close', () => setConn(false, 'Offline'));
-client.on('error', () => setConn(false, 'Connection error'));
+client.on('reconnect', () => { setConn(false, 'Reconnecting…'); dbg('Reconnecting…'); });
+client.on('close', () => { setConn(false, 'Offline'); dbg('Connection closed.', 'err'); });
+client.on('error', (err) => { setConn(false, 'Connection error'); dbg('MQTT error: ' + (err && err.message ? err.message : err), 'err'); });
+client.on('offline', () => dbg('Client went offline.', 'err'));
 
 client.on('message', (topic, message) => {
+  dbg('Received on ' + topic + ': ' + message.toString().slice(0, 120));
   try {
     const data = JSON.parse(message.toString());
     if (topic === TOPIC_STATUS) renderStatus(data);
     else if (topic === TOPIC_LOG) renderLog(data);
-  } catch (e) { /* ignore malformed payload */ }
+  } catch (e) {
+    dbg('Failed to parse message JSON: ' + e.message, 'err');
+  }
 });
 
 function setConn(live, label) {
@@ -218,7 +259,15 @@ function setConn(live, label) {
 }
 
 function publishCmd(obj) {
-  if (client.connected) client.publish(TOPIC_CMD, JSON.stringify(obj));
+  if (!client.connected) {
+    dbg('Tried to send ' + JSON.stringify(obj) + ' but client is NOT connected.', 'err');
+    toast('Not connected — command not sent');
+    return;
+  }
+  client.publish(TOPIC_CMD, JSON.stringify(obj), { qos: 1 }, (err) => {
+    if (err) { dbg('Publish FAILED: ' + err.message, 'err'); toast('Send failed'); }
+    else { dbg('Sent: ' + JSON.stringify(obj), 'sent'); toast('Sent'); }
+  });
 }
 
 function renderStatus(d) {
@@ -280,7 +329,7 @@ function renderLog(entries) {
   });
 }
 
-// ---- Controls ----
+// ---- Controls (each one logs + toasts immediately, before waiting on MQTT ack) ----
 function cmdManualOn(minutes) { publishCmd({cmd:'manualOn', minutes: minutes}); }
 function cmdManualOff() { publishCmd({cmd:'manualOff'}); }
 function cmdManualTimer() {
@@ -288,11 +337,11 @@ function cmdManualTimer() {
   publishCmd({cmd:'manualOn', minutes: m});
 }
 function toggleSchedule() {
-  if (!latestStatus) return;
+  if (!latestStatus) { dbg('No status received yet — cannot toggle schedule.', 'err'); toast('Still loading status…'); return; }
   publishCmd({cmd:'scheduleEnabled', value: !latestStatus.scheduleEnabled});
 }
 function toggleSkip() {
-  if (!latestStatus) return;
+  if (!latestStatus) { dbg('No status received yet — cannot toggle skip.', 'err'); toast('Still loading status…'); return; }
   publishCmd({cmd:'skipNext', value: !latestStatus.skipNext});
 }
 function saveSchedule() {
@@ -308,6 +357,7 @@ function saveSchedule() {
       durationMin: parseInt(document.getElementById('slotDur'+i).value) || 30
     });
   }
+  if (schedules.length === 0) { dbg('No schedule rows found in the DOM — status with schedules[] may not have arrived yet.', 'err'); toast('Nothing to save yet'); return; }
   publishCmd({cmd:'setSchedule', schedules: schedules});
 }
 </script>
